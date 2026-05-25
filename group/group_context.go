@@ -5,7 +5,6 @@ import (
 
 	"github.com/Deln0r/mls-go/crypto"
 	"github.com/Deln0r/mls-go/encoding/mlstls"
-	"github.com/Deln0r/mls-go/tree"
 )
 
 // GroupContext mirrors the RFC 9420 section 8.1 struct that is mixed into
@@ -49,47 +48,6 @@ func (gc GroupContext) Marshal() ([]byte, error) {
 		return nil, err
 	}
 	return e.Bytes(), nil
-}
-
-// TreeHash deterministically hashes the canonical contents of the tree by
-// flat-serializing each slot under the mlstls codec and feeding the result
-// to SHA-256.
-func TreeHash(t *tree.Tree) ([]byte, error) {
-	e := mlstls.NewEncoder()
-	e.WriteUint32(t.Width())
-	for i := uint32(0); i < t.Width(); i++ {
-		idx := tree.NodeIndex(i)
-		node := t.At(idx)
-		if node.IsBlank() {
-			e.WriteUint8(0)
-			continue
-		}
-		if node.Leaf != nil {
-			e.WriteUint8(1)
-			if err := e.WriteOpaque(node.Leaf.EncryptionKey); err != nil {
-				return nil, err
-			}
-			if err := e.WriteOpaque(node.Leaf.SignatureKey); err != nil {
-				return nil, err
-			}
-			if err := e.WriteOpaque(node.Leaf.Credential.Identity); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		e.WriteUint8(2)
-		if err := e.WriteOpaque(node.Parent.EncryptionKey); err != nil {
-			return nil, err
-		}
-		if err := e.WriteOpaque(node.Parent.ParentHash); err != nil {
-			return nil, err
-		}
-		e.WriteUint32(uint32(len(node.Parent.UnmergedLeaves)))
-		for _, ul := range node.Parent.UnmergedLeaves {
-			e.WriteUint32(uint32(ul))
-		}
-	}
-	return crypto.Hash(e.Bytes()), nil
 }
 
 // extendTranscriptHash advances the confirmed_transcript_hash chain by

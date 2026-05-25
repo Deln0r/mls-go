@@ -44,7 +44,7 @@ func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
 	}
 	t := tree.New(leaf)
 
-	th, err := TreeHash(t)
+	th, err := tree.Hash(t)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (s *State) Commit() ([]*Welcome, error) {
 	}
 
 	newEpoch := s.Epoch + 1
-	th, err := TreeHash(s.Tree)
+	th, err := tree.Hash(s.Tree)
 	if err != nil {
 		return nil, err
 	}
