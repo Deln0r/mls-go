@@ -26,7 +26,7 @@ func TestCredentialBasicRoundtrip(t *testing.T) {
 func TestCredentialUnsupportedTypeRejected(t *testing.T) {
 	in := Credential{Type: CredentialX509, Identity: []byte("cert-bytes")}
 	if _, err := mlstls.Marshal(in); err == nil {
-		t.Fatalf("encoding X509 should not succeed in pre-MVP scope")
+		t.Fatalf("X509 credential should not encode while only basic is wired")
 	}
 }
 

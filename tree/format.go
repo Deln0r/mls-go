@@ -189,7 +189,7 @@ func (l *Lifetime) UnmarshalMLS(d *mlstls.Decoder) error {
 }
 
 // Extension carries an extension_type plus extension_data per RFC 9420
-// section 13. Pre-MVP code creates and parses empty extension vectors only.
+// section 13.
 type Extension struct {
 	Type ExtensionType
 	Data []byte
