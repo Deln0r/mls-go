@@ -17,6 +17,7 @@ type State struct {
 	Tree           *tree.Tree
 	MyLeafIndex    tree.LeafIndex
 	MyKey          *KeyPackagePrivate
+	MyLeafPriv     crypto.HPKEPrivateKey
 	Keys           *EpochKeys
 	transcriptHash []byte
 	pendingAdds    []KeyPackage
@@ -68,6 +69,7 @@ func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
 		Tree:           t,
 		MyLeafIndex:    0,
 		MyKey:          creator,
+		MyLeafPriv:     creator.InitPriv,
 		Keys:           keys,
 		transcriptHash: confirmedTranscript,
 	}, nil
@@ -104,6 +106,20 @@ func (s *State) Commit() ([]*Welcome, error) {
 		joinerIndices[i] = li
 	}
 
+	// Generate the committer's UpdatePath, install the new HPKE keys on
+	// the committer's direct path, and pin the committer's new leaf private
+	// key into local state. commit_secret is the path_secret at the root of
+	// the direct path; for a singleton group (no parents on the path) the
+	// spec's convention of an all-zero string applies.
+	cp, err := generateCommitterPath(s.Tree, s.MyLeafIndex, s.MyKey.Public.Identity, s.MyKey.Public.SignatureKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyCommitterPath(s.Tree, s.MyLeafIndex, cp.UpdatePath); err != nil {
+		return nil, err
+	}
+	s.MyLeafPriv = cp.LeafPrivateKey
+
 	newEpoch := s.Epoch + 1
 	th, err := tree.Hash(s.Tree)
 	if err != nil {
@@ -113,7 +129,7 @@ func (s *State) Commit() ([]*Welcome, error) {
 	// Extend the confirmed_transcript_hash with a deterministic epoch tag,
 	// derive epoch keys against the resulting GroupContext, then compute
 	// the confirmation_tag and ship it inside the GroupInfo.
-	commitSecret := make([]byte, crypto.HashSize)
+	commitSecret := cp.CommitSecret
 	newTranscript := extendTranscriptHash(s.transcriptHash, newEpoch, nil)
 
 	gcNew := GroupContext{
@@ -208,6 +224,7 @@ func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
 		Tree:           t,
 		MyLeafIndex:    w.GroupInfo.NewLeafIndex,
 		MyKey:          myKey,
+		MyLeafPriv:     myKey.InitPriv,
 		Keys:           keys,
 		transcriptHash: append([]byte(nil), w.GroupInfo.Context.ConfirmedTranscriptHash...),
 	}, nil

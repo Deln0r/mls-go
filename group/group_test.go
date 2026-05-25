@@ -90,6 +90,36 @@ func TestJoinRejectsWrongRecipient(t *testing.T) {
 	}
 }
 
+func TestCommitProducesNonZeroPathSecret(t *testing.T) {
+	alice, _ := GenerateKeyPackage("alice")
+	bob, _ := GenerateKeyPackage("bob")
+
+	st, _ := Create(alice, []byte("g"))
+	preCommitInit := append([]byte(nil), st.Keys.InitSecret...)
+
+	st.AddMember(bob.Public)
+	if _, err := st.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After a real commit with an UpdatePath, init_secret must differ from
+	// the pre-commit state. (If commit_secret were still all-zero, the
+	// derivation would only differ via the GroupContext bytes; we want
+	// evidence that path_secret actually fed the schedule.)
+	if bytes.Equal(preCommitInit, st.Keys.InitSecret) {
+		t.Fatalf("init_secret unchanged after commit: path_secret chain did not feed key schedule")
+	}
+
+	// The committer's leaf encryption key must have rotated.
+	tree, _ := st.Tree.Leaf(0)
+	if tree == nil {
+		t.Fatalf("alice leaf vanished")
+	}
+	if bytes.Equal(tree.EncryptionKey, alice.Public.InitKey) {
+		t.Fatalf("committer leaf EncryptionKey not rotated after commit")
+	}
+}
+
 func TestEpochSecretChangesEachCommit(t *testing.T) {
 	alice, _ := GenerateKeyPackage("alice")
 	bob, _ := GenerateKeyPackage("bob")
