@@ -10,7 +10,8 @@ func leafFor(id string) *LeafNode {
 	return &LeafNode{
 		EncryptionKey: []byte("ek-" + id),
 		SignatureKey:  []byte("sk-" + id),
-		Identity:      []byte(id),
+		Credential:    BasicCredential([]byte(id)),
+		Source:        LeafNodeSourceKeyPackage,
 	}
 }
 
@@ -26,7 +27,7 @@ func TestNewSingleLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l == nil || !bytes.Equal(l.Identity, []byte("alice")) {
+	if l == nil || !bytes.Equal(l.Credential.Identity, []byte("alice")) {
 		t.Fatalf("leaf 0 = %+v, want alice", l)
 	}
 }

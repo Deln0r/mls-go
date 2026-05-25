@@ -72,7 +72,7 @@ func TreeHash(t *tree.Tree) ([]byte, error) {
 			if err := e.WriteOpaque(node.Leaf.SignatureKey); err != nil {
 				return nil, err
 			}
-			if err := e.WriteOpaque(node.Leaf.Identity); err != nil {
+			if err := e.WriteOpaque(node.Leaf.Credential.Identity); err != nil {
 				return nil, err
 			}
 			continue

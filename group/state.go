@@ -39,7 +39,8 @@ func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
 	leaf := &tree.LeafNode{
 		EncryptionKey: creator.Public.InitKey,
 		SignatureKey:  creator.Public.SignatureKey,
-		Identity:      creator.Public.Identity,
+		Credential:    tree.BasicCredential(creator.Public.Identity),
+		Source:        tree.LeafNodeSourceKeyPackage,
 	}
 	t := tree.New(leaf)
 
@@ -94,7 +95,8 @@ func (s *State) Commit() ([]*Welcome, error) {
 		li, err := s.Tree.AddLeaf(&tree.LeafNode{
 			EncryptionKey: kp.InitKey,
 			SignatureKey:  kp.SignatureKey,
-			Identity:      kp.Identity,
+			Credential:    tree.BasicCredential(kp.Identity),
+			Source:        tree.LeafNodeSourceKeyPackage,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("group: Commit AddLeaf %d: %w", i, err)

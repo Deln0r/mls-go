@@ -103,7 +103,9 @@ func snapshotTree(t *tree.Tree) []*tree.Node {
 			leaf := *n.Leaf
 			leaf.EncryptionKey = append(crypto.HPKEPublicKey(nil), n.Leaf.EncryptionKey...)
 			leaf.SignatureKey = append(crypto.SignaturePublicKey(nil), n.Leaf.SignatureKey...)
-			leaf.Identity = append([]byte(nil), n.Leaf.Identity...)
+			leaf.Credential = tree.BasicCredential(n.Leaf.Credential.Identity)
+			leaf.ParentHash = append([]byte(nil), n.Leaf.ParentHash...)
+			leaf.Signature = append([]byte(nil), n.Leaf.Signature...)
 			copyNode.Leaf = &leaf
 		}
 		if n.Parent != nil {
