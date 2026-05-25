@@ -116,7 +116,7 @@ func (s *State) Commit() ([]*Welcome, error) {
 	// key into local state. commit_secret is the path_secret at the root of
 	// the direct path; for a singleton group (no parents on the path) the
 	// spec's convention of an all-zero string applies.
-	cp, err := generateCommitterPath(s.Tree, s.MyLeafIndex, s.MyKey.Public.Identity, s.MyKey.Public.SignatureKey)
+	cp, err := generateCommitterPath(s.Tree, s.MyLeafIndex, s.GroupID, s.MyKey.Public.Identity, s.MyKey.Public.SignatureKey, s.MyKey.SignaturePriv)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +212,23 @@ func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
 	t, err := rebuildTree(w.GroupInfo.TreeSnapshot)
 	if err != nil {
 		return nil, err
+	}
+
+	// Verify the LeafNodeTBS signature on any leaf that was installed by a
+	// commit (source=commit). The committer's leaf gets signed in
+	// generateCommitterPath; refusing to install it on the joiner side
+	// without verification would let a tampered snapshot pass.
+	for i := uint32(0); i < t.LeafCount(); i++ {
+		li := tree.LeafIndex(i)
+		leaf, err := t.Leaf(li)
+		if err != nil || leaf == nil {
+			continue
+		}
+		if leaf.Source == tree.LeafNodeSourceCommit {
+			if err := verifyLeafNode(leaf, w.GroupInfo.Context.GroupID, uint32(li)); err != nil {
+				return nil, fmt.Errorf("group: Join: LeafNodeTBS signature invalid for leaf %d: %w", li, err)
+			}
+		}
 	}
 
 	keys, err := deriveEpochFromJoiner(gs.JoinerSecret, w.GroupInfo.Context)

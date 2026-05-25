@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/Deln0r/mls-go/crypto"
+	"github.com/Deln0r/mls-go/encoding/mlstls"
 	"github.com/Deln0r/mls-go/tree"
 )
 
@@ -35,12 +36,17 @@ type committerPath struct {
 //
 //  4. commit_secret is the path_secret at the root of the direct path.
 //
+//  5. The committer's new LeafNode (source=commit) is signed under the
+//     "LeafNodeTBS" label by signaturePriv. The TBS bytes include the
+//     leaf core fields plus a group_id || leaf_index context suffix per
+//     RFC 9420 section 5.1.6.
+//
 // The function does not yet encrypt path secrets to copath resolutions;
-// for the current 3-member smoke flow every copath member is an unmerged
-// new joiner and learns the schedule through Welcome.joiner_secret rather
-// than UpdatePathNode ciphertexts. Wire shape is preserved so external
-// readers see a fully-formed UpdatePath.
-func generateCommitterPath(t *tree.Tree, committer tree.LeafIndex, identity []byte, signatureKey crypto.SignaturePublicKey) (*committerPath, error) {
+// every copath member here is an unmerged new joiner and learns the
+// schedule through Welcome.joiner_secret rather than UpdatePathNode
+// ciphertexts. Wire shape is preserved so external readers see a
+// fully-formed UpdatePath.
+func generateCommitterPath(t *tree.Tree, committer tree.LeafIndex, groupID, identity []byte, signaturePub crypto.SignaturePublicKey, signaturePriv crypto.SignaturePrivateKey) (*committerPath, error) {
 	committerNode := committer.ToNode()
 	directPath := committerNode.DirectPath(t.Width())
 
@@ -80,10 +86,20 @@ func generateCommitterPath(t *tree.Tree, committer tree.LeafIndex, identity []by
 
 	newLeaf := tree.LeafNode{
 		EncryptionKey: leafPub,
-		SignatureKey:  signatureKey,
+		SignatureKey:  signaturePub,
 		Credential:    tree.BasicCredential(identity),
 		Source:        tree.LeafNodeSourceCommit,
 	}
+
+	tbs, err := leafNodeTBSBytes(&newLeaf, groupID, uint32(committer))
+	if err != nil {
+		return nil, err
+	}
+	sig, err := crypto.SignWithLabel(signaturePriv, "LeafNodeTBS", tbs)
+	if err != nil {
+		return nil, fmt.Errorf("group: generateCommitterPath sign leaf: %w", err)
+	}
+	newLeaf.Signature = sig
 
 	var commitSecret []byte
 	if len(pathSecrets) == 0 {
@@ -98,6 +114,27 @@ func generateCommitterPath(t *tree.Tree, committer tree.LeafIndex, identity []by
 		PathSecrets:    pathSecrets,
 		CommitSecret:   commitSecret,
 	}, nil
+}
+
+// leafNodeTBSBytes produces the LeafNodeTBS bytes for leaf at leafIndex
+// inside the group identified by groupID.
+func leafNodeTBSBytes(leaf *tree.LeafNode, groupID []byte, leafIndex uint32) ([]byte, error) {
+	e := mlstls.NewEncoder()
+	if err := leaf.MarshalLeafTBS(e, groupID, leafIndex); err != nil {
+		return nil, err
+	}
+	return e.Bytes(), nil
+}
+
+// verifyLeafNode validates a LeafNode's signature against its embedded
+// SignatureKey using the "LeafNodeTBS" label and the appropriate context
+// for its Source. Returns nil on success.
+func verifyLeafNode(leaf *tree.LeafNode, groupID []byte, leafIndex uint32) error {
+	tbs, err := leafNodeTBSBytes(leaf, groupID, leafIndex)
+	if err != nil {
+		return err
+	}
+	return crypto.VerifyWithLabel(leaf.SignatureKey, "LeafNodeTBS", tbs, leaf.Signature)
 }
 
 // applyCommitterPath installs the new public keys carried by an UpdatePath

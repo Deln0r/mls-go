@@ -3,6 +3,9 @@ package group
 import (
 	"bytes"
 	"testing"
+
+	"github.com/Deln0r/mls-go/crypto"
+	"github.com/Deln0r/mls-go/tree"
 )
 
 func TestThreeMemberSmokeDeriveSameEpochSecret(t *testing.T) {
@@ -125,6 +128,74 @@ func TestCommitProducesNonZeroPathSecret(t *testing.T) {
 	}
 	if bytes.Equal(leaf.EncryptionKey, alice.Public.InitKey) {
 		t.Fatalf("committer leaf EncryptionKey not rotated after commit")
+	}
+}
+
+func TestCommitterLeafSignatureVerifies(t *testing.T) {
+	alice, _ := GenerateKeyPackage("alice")
+	bob, _ := GenerateKeyPackage("bob")
+
+	st, _ := Create(alice, []byte("group"))
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	leaf, _ := st.Tree.Leaf(0)
+	if leaf == nil {
+		t.Fatalf("alice leaf vanished")
+	}
+	if leaf.Source != tree.LeafNodeSourceCommit {
+		t.Fatalf("alice leaf source = %d, want commit", leaf.Source)
+	}
+	if len(leaf.Signature) == 0 {
+		t.Fatalf("alice leaf signature is empty after commit")
+	}
+	if err := verifyLeafNode(leaf, st.GroupID, uint32(st.MyLeafIndex)); err != nil {
+		t.Fatalf("LeafNodeTBS signature did not verify: %v", err)
+	}
+}
+
+func TestJoinRejectsTamperedCommitterLeaf(t *testing.T) {
+	alice, _ := GenerateKeyPackage("alice")
+	bob, _ := GenerateKeyPackage("bob")
+
+	st, _ := Create(alice, []byte("group"))
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
+	welcomes, err := st.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Flip a byte in the committer leaf's signature inside the snapshot.
+	w := welcomes[0]
+	if w.GroupInfo.TreeSnapshot[0] == nil || w.GroupInfo.TreeSnapshot[0].Leaf == nil {
+		t.Fatalf("snapshot leaf 0 missing")
+	}
+	sig := append([]byte(nil), w.GroupInfo.TreeSnapshot[0].Leaf.Signature...)
+	sig[0] ^= 0x01
+	w.GroupInfo.TreeSnapshot[0].Leaf.Signature = sig
+
+	// Recompute tree_hash + confirmation_tag so the joiner gets past the
+	// confirmation check and reaches the LeafNode-signature check.
+	rebuilt, err := tree.FromNodes(w.GroupInfo.TreeSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTreeHash, err := tree.Hash(rebuilt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.GroupInfo.Context.TreeHash = newTreeHash
+	// Recompute MAC under the same confirmation_key bound to the new hash.
+	w.GroupInfo.ConfirmationTag = crypto.MAC(st.Keys.ConfirmationKey, w.GroupInfo.Context.ConfirmedTranscriptHash)
+
+	if _, err := Join(bob, w); err == nil {
+		t.Fatalf("Join should reject tampered committer leaf signature")
 	}
 }
 
