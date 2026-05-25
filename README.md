@@ -4,7 +4,7 @@ A pure-Go implementation of [RFC 9420 Messaging Layer Security (MLS)](https://da
 
 [![CI](https://github.com/Deln0r/mls-go/actions/workflows/ci.yml/badge.svg)](https://github.com/Deln0r/mls-go/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Deln0r/mls-go.svg)](https://pkg.go.dev/github.com/Deln0r/mls-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Deln0r/mls-go?cache=v0.1.0)](https://goreportcard.com/report/github.com/Deln0r/mls-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Deln0r/mls-go?cache=v0.1.1)](https://goreportcard.com/report/github.com/Deln0r/mls-go)
 [![Go](https://img.shields.io/badge/go-1.26+-blue)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
