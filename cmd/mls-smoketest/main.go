@@ -42,8 +42,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("alice create: %w", err)
 	}
-	aliceState.AddMember(bob.Public)
-	aliceState.AddMember(charlie.Public)
+	if err := aliceState.AddMember(bob.Public); err != nil {
+		return fmt.Errorf("alice add bob: %w", err)
+	}
+	if err := aliceState.AddMember(charlie.Public); err != nil {
+		return fmt.Errorf("alice add charlie: %w", err)
+	}
 
 	welcomes, err := aliceState.Commit()
 	if err != nil {

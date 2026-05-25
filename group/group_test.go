@@ -23,8 +23,12 @@ func TestThreeMemberSmokeDeriveSameEpochSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aliceState.AddMember(bob.Public)
-	aliceState.AddMember(charlie.Public)
+	if err := aliceState.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
+	if err := aliceState.AddMember(charlie.Public); err != nil {
+		t.Fatal(err)
+	}
 	welcomes, err := aliceState.Commit()
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +84,9 @@ func TestJoinRejectsWrongRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.AddMember(bob.Public)
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
 	welcomes, err := st.Commit()
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +103,9 @@ func TestCommitProducesNonZeroPathSecret(t *testing.T) {
 	st, _ := Create(alice, []byte("g"))
 	preCommitInit := append([]byte(nil), st.Keys.InitSecret...)
 
-	st.AddMember(bob.Public)
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +119,31 @@ func TestCommitProducesNonZeroPathSecret(t *testing.T) {
 	}
 
 	// The committer's leaf encryption key must have rotated.
-	tree, _ := st.Tree.Leaf(0)
-	if tree == nil {
+	leaf, _ := st.Tree.Leaf(0)
+	if leaf == nil {
 		t.Fatalf("alice leaf vanished")
 	}
-	if bytes.Equal(tree.EncryptionKey, alice.Public.InitKey) {
+	if bytes.Equal(leaf.EncryptionKey, alice.Public.InitKey) {
 		t.Fatalf("committer leaf EncryptionKey not rotated after commit")
+	}
+}
+
+func TestAddMemberRejectsTamperedKeyPackage(t *testing.T) {
+	alice, _ := GenerateKeyPackage("alice")
+	bob, _ := GenerateKeyPackage("bob")
+
+	st, _ := Create(alice, []byte("g"))
+
+	// Tamper with bob's identity after signing.
+	tampered := bob.Public
+	tampered.Identity = []byte("not-bob")
+	if err := st.AddMember(tampered); err == nil {
+		t.Fatalf("AddMember should reject tampered KeyPackage")
+	}
+
+	// Honest KeyPackage still accepted.
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatalf("AddMember rejected honest KeyPackage: %v", err)
 	}
 }
 
@@ -128,7 +155,9 @@ func TestEpochSecretChangesEachCommit(t *testing.T) {
 	st, _ := Create(alice, []byte("g"))
 	first := append([]byte(nil), st.Keys.EpochSecret...)
 
-	st.AddMember(bob.Public)
+	if err := st.AddMember(bob.Public); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +166,9 @@ func TestEpochSecretChangesEachCommit(t *testing.T) {
 		t.Errorf("epoch_secret unchanged after first commit")
 	}
 
-	st.AddMember(charlie.Public)
+	if err := st.AddMember(charlie.Public); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.Commit(); err != nil {
 		t.Fatal(err)
 	}

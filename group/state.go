@@ -75,10 +75,15 @@ func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
 	}, nil
 }
 
-// AddMember stages an Add proposal. The actual tree change happens at
-// Commit time.
-func (s *State) AddMember(kp KeyPackage) {
+// AddMember stages an Add proposal. The KeyPackage's self-signature is
+// verified up front; an unsigned or tampered KeyPackage is rejected here
+// rather than at Commit time.
+func (s *State) AddMember(kp KeyPackage) error {
+	if err := kp.Verify(); err != nil {
+		return err
+	}
 	s.pendingAdds = append(s.pendingAdds, kp)
+	return nil
 }
 
 // Commit finalizes pending Add proposals, advances the epoch, and returns
