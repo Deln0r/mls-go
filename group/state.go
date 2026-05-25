@@ -1,0 +1,224 @@
+package group
+
+import (
+	"crypto/rand"
+	"errors"
+	"fmt"
+
+	"github.com/Deln0r/mls-go/crypto"
+	"github.com/Deln0r/mls-go/tree"
+)
+
+// State is a single member's view of a group at a given epoch. It is
+// mutated in place by Commit / ProcessWelcome.
+type State struct {
+	GroupID        []byte
+	Epoch          uint64
+	Tree           *tree.Tree
+	MyLeafIndex    tree.LeafIndex
+	MyKey          *KeyPackagePrivate
+	Keys           *EpochKeys
+	transcriptHash []byte
+	pendingAdds    []KeyPackage
+}
+
+// Create initializes a singleton group with the given creator. The creator
+// occupies leaf index 0; epoch is 0.
+func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
+	if creator == nil {
+		return nil, errors.New("group: Create called with nil creator")
+	}
+	if len(groupID) == 0 {
+		gid := make([]byte, 16)
+		if _, err := rand.Read(gid); err != nil {
+			return nil, fmt.Errorf("group: Create groupID: %w", err)
+		}
+		groupID = gid
+	}
+
+	leaf := &tree.LeafNode{
+		EncryptionKey: creator.Public.InitKey,
+		SignatureKey:  creator.Public.SignatureKey,
+		Identity:      creator.Public.Identity,
+	}
+	t := tree.New(leaf)
+
+	th, err := TreeHash(t)
+	if err != nil {
+		return nil, err
+	}
+	confirmedTranscript := make([]byte, crypto.HashSize)
+	gc := GroupContext{
+		GroupID:                 groupID,
+		Epoch:                   0,
+		TreeHash:                th,
+		ConfirmedTranscriptHash: confirmedTranscript,
+	}
+	prevInit := make([]byte, crypto.HashSize)
+	commitSecret := make([]byte, crypto.HashSize)
+	keys, _, err := deriveEpoch(prevInit, commitSecret, gc)
+	if err != nil {
+		return nil, err
+	}
+
+	return &State{
+		GroupID:        groupID,
+		Epoch:          0,
+		Tree:           t,
+		MyLeafIndex:    0,
+		MyKey:          creator,
+		Keys:           keys,
+		transcriptHash: confirmedTranscript,
+	}, nil
+}
+
+// AddMember stages an Add proposal. The actual tree change happens at
+// Commit time.
+func (s *State) AddMember(kp KeyPackage) {
+	s.pendingAdds = append(s.pendingAdds, kp)
+}
+
+// Commit finalizes pending Add proposals, advances the epoch, and returns
+// one Welcome per newly-joined member.
+func (s *State) Commit() ([]*Welcome, error) {
+	if len(s.pendingAdds) == 0 {
+		return nil, errors.New("group: Commit with no pending proposals")
+	}
+
+	joiners := make([]KeyPackage, len(s.pendingAdds))
+	copy(joiners, s.pendingAdds)
+	s.pendingAdds = nil
+
+	joinerIndices := make([]tree.LeafIndex, len(joiners))
+	for i, kp := range joiners {
+		li, err := s.Tree.AddLeaf(&tree.LeafNode{
+			EncryptionKey: kp.InitKey,
+			SignatureKey:  kp.SignatureKey,
+			Identity:      kp.Identity,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("group: Commit AddLeaf %d: %w", i, err)
+		}
+		joinerIndices[i] = li
+	}
+
+	newEpoch := s.Epoch + 1
+	th, err := TreeHash(s.Tree)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extend the confirmed_transcript_hash with a deterministic epoch tag,
+	// derive epoch keys against the resulting GroupContext, then compute
+	// the confirmation_tag and ship it inside the GroupInfo.
+	commitSecret := make([]byte, crypto.HashSize)
+	newTranscript := extendTranscriptHash(s.transcriptHash, newEpoch, nil)
+
+	gcNew := GroupContext{
+		GroupID:                 s.GroupID,
+		Epoch:                   newEpoch,
+		TreeHash:                th,
+		ConfirmedTranscriptHash: newTranscript,
+	}
+	keysNew, joinerSecret, err := deriveEpoch(s.Keys.InitSecret, commitSecret, gcNew)
+	if err != nil {
+		return nil, err
+	}
+	confirmationTag := crypto.MAC(keysNew.ConfirmationKey, newTranscript)
+
+	// Build Welcomes.
+	snap := snapshotTree(s.Tree)
+	welcomes := make([]*Welcome, 0, len(joiners))
+	for i, kp := range joiners {
+		ref, err := keyPackageRefHash(kp)
+		if err != nil {
+			return nil, err
+		}
+		enc, ct, err := sealGroupSecrets(kp.InitKey, joinerSecret)
+		if err != nil {
+			return nil, err
+		}
+		welcomes = append(welcomes, &Welcome{
+			Envelopes: []EncryptedGroupSecrets{{
+				KeyPackageRef: ref,
+				Enc:           enc,
+				Ciphertext:    ct,
+			}},
+			GroupInfo: GroupInfo{
+				Context:         gcNew,
+				NewLeafIndex:    joinerIndices[i],
+				TreeSnapshot:    snap,
+				ConfirmationTag: confirmationTag,
+			},
+		})
+	}
+
+	// Commit committer-side state.
+	s.Epoch = newEpoch
+	s.Keys = keysNew
+	s.transcriptHash = newTranscript
+
+	return welcomes, nil
+}
+
+// Join is the joiner-side counterpart to Commit. It consumes a Welcome
+// produced for the given KeyPackage and returns the new member's State.
+func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
+	if w == nil {
+		return nil, errors.New("group: Join called with nil welcome")
+	}
+	myRef, err := keyPackageRefHash(myKey.Public)
+	if err != nil {
+		return nil, err
+	}
+	var env *EncryptedGroupSecrets
+	for i := range w.Envelopes {
+		if equalBytes(w.Envelopes[i].KeyPackageRef, myRef) {
+			env = &w.Envelopes[i]
+			break
+		}
+	}
+	if env == nil {
+		return nil, errors.New("group: Join: no envelope addressed to this KeyPackage")
+	}
+	gs, err := openGroupSecrets(myKey.InitPriv, env.Enc, env.Ciphertext)
+	if err != nil {
+		return nil, err
+	}
+
+	t, err := rebuildTree(w.GroupInfo.TreeSnapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	keys, err := deriveEpochFromJoiner(gs.JoinerSecret, w.GroupInfo.Context)
+	if err != nil {
+		return nil, err
+	}
+
+	if !crypto.MACEqual(crypto.MAC(keys.ConfirmationKey, w.GroupInfo.Context.ConfirmedTranscriptHash), w.GroupInfo.ConfirmationTag) {
+		return nil, errors.New("group: Join confirmation_tag mismatch")
+	}
+
+	return &State{
+		GroupID:        append([]byte(nil), w.GroupInfo.Context.GroupID...),
+		Epoch:          w.GroupInfo.Context.Epoch,
+		Tree:           t,
+		MyLeafIndex:    w.GroupInfo.NewLeafIndex,
+		MyKey:          myKey,
+		Keys:           keys,
+		transcriptHash: append([]byte(nil), w.GroupInfo.Context.ConfirmedTranscriptHash...),
+	}, nil
+}
+
+func equalBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
