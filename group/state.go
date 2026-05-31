@@ -80,7 +80,7 @@ func Create(creator *KeyPackagePrivate, groupID []byte) (*State, error) {
 // rather than at Commit time.
 func (s *State) AddMember(kp KeyPackage) error {
 	if err := kp.Verify(); err != nil {
-		return err
+		return fmt.Errorf("group: AddMember: %w", err)
 	}
 	s.pendingAdds = append(s.pendingAdds, kp)
 	return nil
@@ -90,7 +90,7 @@ func (s *State) AddMember(kp KeyPackage) error {
 // one Welcome per newly-joined member.
 func (s *State) Commit() ([]*Welcome, error) {
 	if len(s.pendingAdds) == 0 {
-		return nil, errors.New("group: Commit with no pending proposals")
+		return nil, errors.New("group: Commit with no pending proposals; call AddMember before Commit")
 	}
 
 	joiners := make([]KeyPackage, len(s.pendingAdds))
@@ -118,17 +118,17 @@ func (s *State) Commit() ([]*Welcome, error) {
 	// spec's convention of an all-zero string applies.
 	cp, err := generateCommitterPath(s.Tree, s.MyLeafIndex, s.GroupID, s.MyKey.Public.Identity, s.MyKey.Public.SignatureKey, s.MyKey.SignaturePriv)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Commit generate UpdatePath: %w", err)
 	}
 	if err := applyCommitterPath(s.Tree, s.MyLeafIndex, cp.UpdatePath); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Commit apply UpdatePath: %w", err)
 	}
 	s.MyLeafPriv = cp.LeafPrivateKey
 
 	newEpoch := s.Epoch + 1
 	th, err := tree.Hash(s.Tree)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Commit tree_hash: %w", err)
 	}
 
 	// Extend the confirmed_transcript_hash with a deterministic epoch tag,
@@ -145,7 +145,7 @@ func (s *State) Commit() ([]*Welcome, error) {
 	}
 	keysNew, joinerSecret, err := deriveEpoch(s.Keys.InitSecret, commitSecret, gcNew)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Commit derive epoch keys: %w", err)
 	}
 	confirmationTag := crypto.MAC(keysNew.ConfirmationKey, newTranscript)
 
@@ -155,11 +155,11 @@ func (s *State) Commit() ([]*Welcome, error) {
 	for i, kp := range joiners {
 		ref, err := keyPackageRefHash(kp)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("group: Commit Welcome[%d] KeyPackage ref: %w", i, err)
 		}
 		enc, ct, err := sealGroupSecrets(kp.InitKey, joinerSecret)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("group: Commit Welcome[%d] HPKE seal: %w", i, err)
 		}
 		welcomes = append(welcomes, &Welcome{
 			Envelopes: []EncryptedGroupSecrets{{
@@ -192,7 +192,7 @@ func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
 	}
 	myRef, err := keyPackageRefHash(myKey.Public)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Join compute KeyPackage ref: %w", err)
 	}
 	var env *EncryptedGroupSecrets
 	for i := range w.Envelopes {
@@ -202,16 +202,16 @@ func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
 		}
 	}
 	if env == nil {
-		return nil, errors.New("group: Join: no envelope addressed to this KeyPackage")
+		return nil, fmt.Errorf("group: Join: no envelope addressed to this KeyPackage (welcome carries %d envelope(s); check that the KeyPackage handed to Join matches the one whose Public was passed to AddMember)", len(w.Envelopes))
 	}
 	gs, err := openGroupSecrets(myKey.InitPriv, env.Enc, env.Ciphertext)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Join HPKE open GroupSecrets: %w", err)
 	}
 
 	t, err := rebuildTree(w.GroupInfo.TreeSnapshot)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Join rebuild tree from snapshot: %w", err)
 	}
 
 	// Verify the LeafNodeTBS signature on any leaf that was installed by a
@@ -233,11 +233,11 @@ func Join(myKey *KeyPackagePrivate, w *Welcome) (*State, error) {
 
 	keys, err := deriveEpochFromJoiner(gs.JoinerSecret, w.GroupInfo.Context)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("group: Join derive epoch keys: %w", err)
 	}
 
 	if !crypto.MACEqual(crypto.MAC(keys.ConfirmationKey, w.GroupInfo.Context.ConfirmedTranscriptHash), w.GroupInfo.ConfirmationTag) {
-		return nil, errors.New("group: Join confirmation_tag mismatch")
+		return nil, errors.New("group: Join confirmation_tag mismatch (committer and joiner derived divergent confirmation_key, likely a GroupContext field disagreement: tree_hash, transcript_hash, or epoch)")
 	}
 
 	return &State{
